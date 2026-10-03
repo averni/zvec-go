@@ -15,6 +15,10 @@ import (
 // IndexParams wraps zvec_index_params_t (opaque pointer).
 type IndexParams struct {
 	handle *C.zvec_index_params_t
+	// owned reports whether this wrapper owns handle. Params borrowed from a
+	// FieldSchema via GetIndexParams are not owned: the schema keeps ownership
+	// and frees them, so calling Destroy on them must be a no-op.
+	owned bool
 }
 
 // NewIndexParams creates index parameters with the specified index type.
@@ -23,7 +27,7 @@ func NewIndexParams(indexType IndexType) *IndexParams {
 	if handle == nil {
 		return nil
 	}
-	return &IndexParams{handle: handle}
+	return &IndexParams{handle: handle, owned: true}
 }
 
 // NewHNSWIndexParams creates HNSW index parameters with the specified metric type and parameters.
@@ -137,11 +141,18 @@ func NewFTSIndexParams(tokenizerName string, filters []string, extraParams strin
 }
 
 // Destroy releases the index parameters resources.
+//
+// It is a no-op for params borrowed from a FieldSchema (see
+// FieldSchema.GetIndexParams): those are owned by the schema and released when
+// it is destroyed.
 func (p *IndexParams) Destroy() {
-	if p.handle != nil {
-		C.zvec_index_params_destroy(p.handle)
-		p.handle = nil
+	if p == nil {
+		return
 	}
+	if p.handle != nil && p.owned {
+		C.zvec_index_params_destroy(p.handle)
+	}
+	p.handle = nil
 }
 
 // GetType returns the index type.
@@ -214,6 +225,24 @@ func (p *IndexParams) SetIVFParams(nList, nIters int, useSoar bool) error {
 	return toError(C.zvec_index_params_set_ivf_params(p.handle, C.int(nList), C.int(nIters), C.bool(useSoar)))
 }
 
+// GetIVFParams returns the IVF parameters: nList (number of Voronoi cells),
+// nIters (training iterations) and useSoar.
+//
+// Available since zvec v0.7.0 (c_api: zvec_index_params_get_ivf_params).
+func (p *IndexParams) GetIVFParams() (nList, nIters int, useSoar bool, err error) {
+	if p == nil || p.handle == nil {
+		return 0, 0, false, invalidArgumentError("index params is nil")
+	}
+	var cNList, cNIters C.int
+	var cUseSoar C.bool
+	defer lockErrorThread()()
+	err = toError(C.zvec_index_params_get_ivf_params(p.handle, &cNList, &cNIters, &cUseSoar))
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return int(cNList), int(cNIters), bool(cUseSoar), nil
+}
+
 // SetIVFRaBitQParams sets IVF RaBitQ specific parameters.
 // A sampleCount of 0 means all vectors are used for training.
 //
@@ -257,6 +286,23 @@ func (p *IndexParams) GetVamanaTwoPassBuild() bool {
 func (p *IndexParams) SetInvertParams(enableRangeOpt, enableWildcard bool) error {
 	defer lockErrorThread()()
 	return toError(C.zvec_index_params_set_invert_params(p.handle, C.bool(enableRangeOpt), C.bool(enableWildcard)))
+}
+
+// GetInvertParams returns the inverted index parameters: enableRangeOpt
+// (range-query optimization) and enableWildcard (extended wildcard matching).
+//
+// Available since zvec v0.7.0 (c_api: zvec_index_params_get_invert_params).
+func (p *IndexParams) GetInvertParams() (enableRangeOpt, enableWildcard bool, err error) {
+	if p == nil || p.handle == nil {
+		return false, false, invalidArgumentError("index params is nil")
+	}
+	var cRangeOpt, cWildcard C.bool
+	defer lockErrorThread()()
+	err = toError(C.zvec_index_params_get_invert_params(p.handle, &cRangeOpt, &cWildcard))
+	if err != nil {
+		return false, false, err
+	}
+	return bool(cRangeOpt), bool(cWildcard), nil
 }
 
 // SetFTSParams sets FTS index specific parameters.
@@ -480,6 +526,27 @@ func (f *FieldSchema) SetIndexParams(params *IndexParams) error {
 	return toError(C.zvec_field_schema_set_index_params(handle, params.handle))
 }
 
+// GetIndexParams returns the field's index parameters, or nil if the field has
+// no index.
+//
+// The returned value is **borrowed** from the field schema: the schema retains
+// ownership and releases it, so Destroy on the result is a no-op. The pointer
+// becomes invalid once the field or its owning CollectionSchema is modified or
+// destroyed, so read the values you need promptly rather than retaining it.
+//
+// Available since zvec v0.7.0 (c_api: zvec_field_schema_get_index_params).
+func (f *FieldSchema) GetIndexParams() *IndexParams {
+	handle := f.validHandle()
+	if handle == nil {
+		return nil
+	}
+	params := C.zvec_field_schema_get_index_params(handle)
+	if params == nil {
+		return nil
+	}
+	return &IndexParams{handle: params, owned: false}
+}
+
 // CollectionSchema wraps zvec_collection_schema_t (opaque pointer).
 type CollectionSchema struct {
 	handle     *C.zvec_collection_schema_t
@@ -549,6 +616,95 @@ func (s *CollectionSchema) GetField(name string) *FieldSchema {
 		return nil
 	}
 	return &FieldSchema{handle: handle, owned: false, owner: s, ownerGeneration: s.generation}
+}
+
+// getFieldArray is the shared implementation for GetVectorFields and
+// GetForwardFields. The C API allocates the outer pointer array, which we free
+// here; the individual field handles are owned by the schema and must NOT be
+// freed, so they are wrapped as non-owning FieldSchema values tied to this
+// schema's generation.
+func (s *CollectionSchema) getFieldArray(cFields **C.zvec_field_schema_t, count C.size_t) []*FieldSchema {
+	defer C.zvec_free(unsafe.Pointer(cFields))
+	n := int(count)
+	if cFields == nil || n == 0 {
+		return nil
+	}
+	handles := unsafe.Slice(cFields, n)
+	fields := make([]*FieldSchema, n)
+	for i := 0; i < n; i++ {
+		fields[i] = &FieldSchema{handle: handles[i], owned: false, owner: s, ownerGeneration: s.generation}
+	}
+	return fields
+}
+
+// GetVectorFields returns every vector field in the schema (non-owning).
+//
+// The returned FieldSchema values are borrowed from the schema and become
+// invalid once it is modified or destroyed; do not retain them past the
+// schema's lifetime.
+//
+// Available since zvec v0.7.0 (c_api: zvec_collection_schema_get_vector_fields).
+func (s *CollectionSchema) GetVectorFields() ([]*FieldSchema, error) {
+	if s == nil || s.handle == nil {
+		return nil, invalidArgumentError("collection schema is no longer valid")
+	}
+	var cFields **C.zvec_field_schema_t
+	var count C.size_t
+	defer lockErrorThread()()
+	if err := toError(C.zvec_collection_schema_get_vector_fields(s.handle, &cFields, &count)); err != nil {
+		return nil, err
+	}
+	return s.getFieldArray(cFields, count), nil
+}
+
+// GetForwardFields returns every forward (scalar) field in the schema
+// (non-owning).
+//
+// The returned FieldSchema values are borrowed from the schema and become
+// invalid once it is modified or destroyed; do not retain them past the
+// schema's lifetime.
+//
+// Available since zvec v0.7.0 (c_api: zvec_collection_schema_get_forward_fields).
+func (s *CollectionSchema) GetForwardFields() ([]*FieldSchema, error) {
+	if s == nil || s.handle == nil {
+		return nil, invalidArgumentError("collection schema is no longer valid")
+	}
+	var cFields **C.zvec_field_schema_t
+	var count C.size_t
+	defer lockErrorThread()()
+	if err := toError(C.zvec_collection_schema_get_forward_fields(s.handle, &cFields, &count)); err != nil {
+		return nil, err
+	}
+	return s.getFieldArray(cFields, count), nil
+}
+
+// GetAllFieldNames returns the names of every field in the schema, vector and
+// scalar alike.
+//
+// Available since zvec v0.7.0 (c_api: zvec_collection_schema_get_all_field_names).
+func (s *CollectionSchema) GetAllFieldNames() ([]string, error) {
+	if s == nil || s.handle == nil {
+		return nil, invalidArgumentError("collection schema is no longer valid")
+	}
+	var cNames **C.char
+	var count C.size_t
+	defer lockErrorThread()()
+	if err := toError(C.zvec_collection_schema_get_all_field_names(s.handle, &cNames, &count)); err != nil {
+		return nil, err
+	}
+	// The array is library-allocated; the strings themselves are owned by the
+	// schema, so free only the array.
+	defer C.zvec_free(unsafe.Pointer(cNames))
+	n := int(count)
+	if cNames == nil || n == 0 {
+		return nil, nil
+	}
+	ptrs := unsafe.Slice(cNames, n)
+	names := make([]string, n)
+	for i := 0; i < n; i++ {
+		names[i] = C.GoString(ptrs[i])
+	}
+	return names, nil
 }
 
 // DropField drops a field from the collection schema.

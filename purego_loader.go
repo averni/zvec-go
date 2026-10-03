@@ -75,6 +75,7 @@ type zvecPuregoAPI struct {
 	indexParamsGetHNSWM              func(unsafe.Pointer) int32
 	indexParamsGetHNSWEfConstruction func(unsafe.Pointer) int32
 	indexParamsSetIVFParams          func(unsafe.Pointer, int32, int32, bool) int32
+	indexParamsGetIVFParams          func(unsafe.Pointer, *int32, *int32, *bool) int32
 	indexParamsSetIVFRaBitQParams    func(unsafe.Pointer, int32, int32, int32) int32
 	indexParamsGetIVFRaBitQParams    func(unsafe.Pointer, *int32, *int32, *int32) int32
 	indexParamsSetDiskANNParams      func(unsafe.Pointer, int32, int32, int32) int32
@@ -84,6 +85,7 @@ type zvecPuregoAPI struct {
 	indexParamsSetVamanaTwoPassBuild func(unsafe.Pointer, bool) int32
 	indexParamsGetVamanaTwoPassBuild func(unsafe.Pointer) bool
 	indexParamsSetInvertParams       func(unsafe.Pointer, bool, bool) int32
+	indexParamsGetInvertParams       func(unsafe.Pointer, *bool, *bool) int32
 	indexParamsSetFTSParams          func(unsafe.Pointer, unsafe.Pointer, unsafe.Pointer, unsafe.Pointer) int32
 	indexParamsGetFTSParams          func(unsafe.Pointer, *unsafe.Pointer, *unsafe.Pointer, *unsafe.Pointer) int32
 	stringArrayCreate                func(uintptr) unsafe.Pointer
@@ -106,6 +108,7 @@ type zvecPuregoAPI struct {
 	fieldSchemaHasIndex       func(unsafe.Pointer) bool
 	fieldSchemaGetIndexType   func(unsafe.Pointer) uint32
 	fieldSchemaSetIndexParams func(unsafe.Pointer, unsafe.Pointer) int32
+	fieldSchemaGetIndexParams func(unsafe.Pointer) unsafe.Pointer
 
 	collectionSchemaCreate               func(string) unsafe.Pointer
 	collectionSchemaDestroy              func(unsafe.Pointer)
@@ -114,6 +117,9 @@ type zvecPuregoAPI struct {
 	collectionSchemaAddField             func(unsafe.Pointer, unsafe.Pointer) int32
 	collectionSchemaHasField             func(unsafe.Pointer, string) bool
 	collectionSchemaGetField             func(unsafe.Pointer, string) unsafe.Pointer
+	collectionSchemaGetAllFieldNames     func(unsafe.Pointer, *unsafe.Pointer, *uintptr) int32
+	collectionSchemaGetVectorFields      func(unsafe.Pointer, *unsafe.Pointer, *uintptr) int32
+	collectionSchemaGetForwardFields     func(unsafe.Pointer, *unsafe.Pointer, *uintptr) int32
 	collectionSchemaDropField            func(unsafe.Pointer, string) int32
 	collectionSchemaAddIndex             func(unsafe.Pointer, string, unsafe.Pointer) int32
 	collectionSchemaDropIndex            func(unsafe.Pointer, string) int32
@@ -420,6 +426,7 @@ func registerPuregoSymbols(handle uintptr) (err error) {
 	register(&puregoFns.indexParamsGetHNSWM, "zvec_index_params_get_hnsw_m")
 	register(&puregoFns.indexParamsGetHNSWEfConstruction, "zvec_index_params_get_hnsw_ef_construction")
 	register(&puregoFns.indexParamsSetIVFParams, "zvec_index_params_set_ivf_params")
+	register(&puregoFns.indexParamsGetIVFParams, "zvec_index_params_get_ivf_params")
 	register(&puregoFns.indexParamsSetIVFRaBitQParams, "zvec_index_params_set_ivf_rabitq_params")
 	register(&puregoFns.indexParamsGetIVFRaBitQParams, "zvec_index_params_get_ivf_rabitq_params")
 	register(&puregoFns.indexParamsSetDiskANNParams, "zvec_index_params_set_diskann_params")
@@ -429,6 +436,7 @@ func registerPuregoSymbols(handle uintptr) (err error) {
 	register(&puregoFns.indexParamsSetVamanaTwoPassBuild, "zvec_index_params_set_vamana_two_pass_build")
 	register(&puregoFns.indexParamsGetVamanaTwoPassBuild, "zvec_index_params_get_vamana_two_pass_build")
 	register(&puregoFns.indexParamsSetInvertParams, "zvec_index_params_set_invert_params")
+	register(&puregoFns.indexParamsGetInvertParams, "zvec_index_params_get_invert_params")
 	register(&puregoFns.indexParamsSetFTSParams, "zvec_index_params_set_fts_params")
 	register(&puregoFns.indexParamsGetFTSParams, "zvec_index_params_get_fts_params")
 	register(&puregoFns.stringArrayCreate, "zvec_string_array_create")
@@ -451,6 +459,7 @@ func registerPuregoSymbols(handle uintptr) (err error) {
 	register(&puregoFns.fieldSchemaHasIndex, "zvec_field_schema_has_index")
 	register(&puregoFns.fieldSchemaGetIndexType, "zvec_field_schema_get_index_type")
 	register(&puregoFns.fieldSchemaSetIndexParams, "zvec_field_schema_set_index_params")
+	register(&puregoFns.fieldSchemaGetIndexParams, "zvec_field_schema_get_index_params")
 
 	register(&puregoFns.collectionSchemaCreate, "zvec_collection_schema_create")
 	register(&puregoFns.collectionSchemaDestroy, "zvec_collection_schema_destroy")
@@ -459,6 +468,9 @@ func registerPuregoSymbols(handle uintptr) (err error) {
 	register(&puregoFns.collectionSchemaAddField, "zvec_collection_schema_add_field")
 	register(&puregoFns.collectionSchemaHasField, "zvec_collection_schema_has_field")
 	register(&puregoFns.collectionSchemaGetField, "zvec_collection_schema_get_field")
+	register(&puregoFns.collectionSchemaGetAllFieldNames, "zvec_collection_schema_get_all_field_names")
+	register(&puregoFns.collectionSchemaGetVectorFields, "zvec_collection_schema_get_vector_fields")
+	register(&puregoFns.collectionSchemaGetForwardFields, "zvec_collection_schema_get_forward_fields")
 	register(&puregoFns.collectionSchemaDropField, "zvec_collection_schema_drop_field")
 	register(&puregoFns.collectionSchemaAddIndex, "zvec_collection_schema_add_index")
 	register(&puregoFns.collectionSchemaDropIndex, "zvec_collection_schema_drop_index")
